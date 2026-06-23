@@ -1,7 +1,19 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import Optional, List
+from sqlalchemy.orm import Session as DBSession
+from datetime import datetime
 from dotenv import load_dotenv
+
+import database
+import models
+import base64
+import fitz  # PyMuPDF
+
+# Create DB tables
+models.Base.metadata.create_all(bind=database.engine)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -44,11 +56,47 @@ class ChatRequest(BaseModel):
         min_length=1,
         description="The message sent by the user to the AI Chat Assistant.",
     )
+    image_base64: Optional[str] = Field(
+        None,
+        description="Base64 encoded string of an uploaded image.",
+    )
+    file_base64: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
 
 
 # Response Pydantic Schema
 class ChatResponse(BaseModel):
     response: str = Field(..., description="The AI generated response message.")
+
+class MessageCreate(BaseModel):
+    text: Optional[str] = None
+    is_user: bool = True
+    image_base64: Optional[str] = None
+    tool_status: Optional[str] = None
+
+class MessageOut(BaseModel):
+    id: int
+    session_id: str
+    text: Optional[str]
+    is_user: bool
+    image_base64: Optional[str]
+    tool_status: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class SessionOut(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class SessionRename(BaseModel):
+    title: str
 
 
 @app.get("/")
@@ -63,30 +111,137 @@ def read_root():
     }
 
 
-@app.post("/chat", response_model=ChatResponse, status_code=status.HTTP_200_OK)
+@app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    POST /chat endpoint to receive user questions, consult Gemini, and return AI generated replies.
+    POST /chat endpoint to receive user questions, consult Groq via streaming, and handle MCP tools.
     """
     try:
-        # Re-initialize the Groq service dynamically if it was not setup originally
-        # (e.g. if the user runs the app first and configures the .env key later)
         global groq_service
         if not groq_service.client:
             groq_service = GroqService()
 
-        ai_reply = await groq_service.generate_response(request.message)
-        return ChatResponse(response=ai_reply)
+        message_text = request.message
+        
+        if request.file_base64:
+            try:
+                file_bytes = base64.b64decode(request.file_base64)
+                extracted_text = ""
+                
+                if request.file_type == "application/pdf":
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    for page in doc:
+                        extracted_text += page.get_text()
+                elif request.file_type in ["text/plain", "text/csv"]:
+                    extracted_text = file_bytes.decode("utf-8")
+                    
+                if extracted_text:
+                    extracted_text = extracted_text[:30000] # Safe limit to prevent context blowup
+                    message_text = f"Document Context ({request.file_name}):\n{extracted_text}\n\nUser Question:\n{message_text}"
+            except Exception as e:
+                print(f"Error processing document: {e}")
+
+        return StreamingResponse(
+            groq_service.generate_stream(message_text, request.image_base64), 
+            media_type="text/event-stream"
+        )
 
     except ValueError as ve:
-        # Configuration/Validation issues
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
     except RuntimeError as re:
-        # Groq API issues
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(re))
     except Exception as e:
-        # Catch-all for unexpected backend failures
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected server error occurred: {str(e)}",
         )
+
+@app.post("/sessions", response_model=SessionOut)
+def create_session(db: DBSession = Depends(database.get_db)):
+    session = models.Session()
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+@app.get("/sessions", response_model=List[SessionOut])
+def get_sessions(db: DBSession = Depends(database.get_db)):
+    return db.query(models.Session).order_by(models.Session.created_at.desc()).all()
+
+@app.get("/sessions/search", response_model=List[SessionOut])
+def search_sessions(q: str, db: DBSession = Depends(database.get_db)):
+    search_query = f"%{q}%"
+    sessions = db.query(models.Session).outerjoin(models.Message).filter(
+        (models.Session.title.ilike(search_query)) | 
+        (models.Message.text.ilike(search_query))
+    ).distinct().order_by(models.Session.created_at.desc()).all()
+    return sessions
+
+@app.get("/sessions/{session_id}/messages", response_model=List[MessageOut])
+def get_messages(session_id: str, db: DBSession = Depends(database.get_db)):
+    return db.query(models.Message).filter(models.Message.session_id == session_id).order_by(models.Message.created_at.asc()).all()
+
+@app.post("/sessions/{session_id}/messages", response_model=MessageOut)
+def create_message(session_id: str, message: MessageCreate, db: DBSession = Depends(database.get_db)):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Update title on first user message
+    if message.is_user and message.text and session.title == "New Chat":
+        session.title = message.text[:30] + ("..." if len(message.text) > 30 else "")
+
+    new_msg = models.Message(
+        session_id=session_id,
+        text=message.text,
+        is_user=message.is_user,
+        image_base64=message.image_base64,
+        tool_status=message.tool_status
+    )
+    db.add(new_msg)
+    db.commit()
+    db.refresh(new_msg)
+    return new_msg
+
+@app.put("/messages/{message_id}", response_model=MessageOut)
+def update_message(message_id: int, data: MessageCreate, db: DBSession = Depends(database.get_db)):
+    msg = db.query(models.Message).filter(models.Message.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    msg.text = data.text
+    if data.image_base64:
+        msg.image_base64 = data.image_base64
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+@app.delete("/sessions/{session_id}/messages_after/{message_id}")
+def delete_messages_after(session_id: str, message_id: int, db: DBSession = Depends(database.get_db)):
+    msgs_to_delete = db.query(models.Message).filter(
+        models.Message.session_id == session_id,
+        models.Message.id > message_id
+    ).all()
+    count = len(msgs_to_delete)
+    for msg in msgs_to_delete:
+        db.delete(msg)
+    db.commit()
+    return {"status": "deleted", "count": count}
+
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: str, db: DBSession = Depends(database.get_db)):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.delete(session)
+    db.commit()
+    return {"status": "deleted"}
+
+@app.put("/sessions/{session_id}", response_model=SessionOut)
+def rename_session(session_id: str, data: SessionRename, db: DBSession = Depends(database.get_db)):
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session.title = data.title
+    db.commit()
+    db.refresh(session)
+    return session
