@@ -1,6 +1,6 @@
 # AI Chat Assistant
 
-A full-stack, responsive AI Chat Assistant built with **React (Vite + Material UI)** for a premium dark-themed, glassmorphic UI, and **FastAPI** on the backend using the **Google Gemini SDK**.
+A full-stack, responsive AI Chat Assistant built with **React (Vite + Material UI)** for a premium dark-themed, glassmorphic UI, and **FastAPI** on the backend using the **Groq SDK (LLaMA 3.1)**.
 
 ---
 
@@ -16,7 +16,7 @@ chatbot/
 │   ├── .env
 │   ├── .env.example
 │   └── services/
-│       └── gemini_service.py
+│       └── groq_service.py
 └── frontend/
     ├── index.html
     ├── package.json
@@ -37,9 +37,9 @@ chatbot/
 ## Features
 
 - **Premium Aesthetics**: Glassmorphism dark mode, glowing gradients, hover effects, and slide-in micro-animations.
-- **Asynchronous Communications**: FastAPI with Gemini `google-generativeai` SDK integration.
+- **Asynchronous Communications**: FastAPI with Groq SDK integration.
 - **Dynamic UX**: Scrollable chat layout with auto-scroll anchors, a pulsing loading state while waiting for the AI response, and clear user/AI bubble alignment.
-- **Robust Exception Handling**: Custom validation and informative error screens if backend or Gemini keys are misconfigured.
+- **Robust Exception Handling**: Custom validation and informative error screens if backend or Groq keys are misconfigured.
 - **CORS Configured**: Configured to connect easily from the Vite local port (`5173`) to the FastAPI server (`8000`).
 
 ---
@@ -73,7 +73,7 @@ chatbot/
 4. Configure your environment variables:
    - Rename `.env.example` to `.env` or create a new `.env` file:
      ```env
-     GEMINI_API_KEY=your_actual_gemini_api_key
+     GROQ_API_KEY=your_actual_groq_api_key
      ```
 
 ### 3. Frontend Setup

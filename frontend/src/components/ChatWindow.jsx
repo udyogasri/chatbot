@@ -1,7 +1,9 @@
 import React, { useEffect, useRef } from "react";
-import { Box, Typography, Alert, CircularProgress, Link } from "@mui/material";
+import { Box, Typography, Alert, IconButton, Tooltip } from "@mui/material";
 import { styled, keyframes } from "@mui/material/styles";
 import SmartToyRoundedIcon from "@mui/icons-material/SmartToyRounded";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
+import ViewSidebarRoundedIcon from "@mui/icons-material/ViewSidebarRounded";
 import MessageBubble from "./MessageBubble";
 import ChatInput from "./ChatInput";
 
@@ -21,7 +23,7 @@ const WindowContainer = styled(Box)(() => ({
   display: "flex",
   flexDirection: "column",
   height: "100vh",
-  width: "100vw",
+  width: "100%",
   backgroundColor: "#0b0f19",
   backgroundImage:
     "radial-gradient(circle at 10% 20%, rgba(124, 77, 255, 0.05) 0%, transparent 40%), radial-gradient(circle at 90% 80%, rgba(0, 176, 255, 0.05) 0%, transparent 40%)",
@@ -109,40 +111,73 @@ const EmptyState = styled(Box)(({ theme }) => ({
   gap: theme.spacing(2),
 }));
 
-export const ChatWindow = ({ messages, isLoading, error, onSendMessage }) => {
+export const ChatWindow = ({ messages, isLoading, error, onSendMessage, isSidebarOpen, toggleSidebar, onRegenerate, onEdit }) => {
   const messagesEndRef = useRef(null);
 
   // Automatically scroll to latest message when array length changes or loading changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages, isLoading]);
+
+  const handleDownloadChat = () => {
+    let markdown = "# Chat Transcript\n\n";
+    messages.forEach((msg) => {
+      const sender = msg.isUser ? "User" : "AI Assistant";
+      markdown += `**${sender}:**\n${msg.text}\n\n`;
+    });
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "chat-transcript.md";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <WindowContainer>
       {/* Dynamic Header */}
       <Header>
-        <SmartToyRoundedIcon sx={{ color: "#7c4dff", fontSize: 32, mr: 1.5 }} />
-        <Box sx={{ display: "flex", flexDirection: "column" }}>
-          <Typography
-            variant="h6"
-            sx={{
-              fontWeight: 700,
-              fontSize: { xs: "1.05rem", sm: "1.25rem" },
-              letterSpacing: "0.5px",
-            }}
-          >
-            AI Chat Assistant
-          </Typography>
-          <Box sx={{ display: "flex", alignItems: "center" }}>
+        {!isSidebarOpen && (
+          <Tooltip title="Open sidebar">
+            <IconButton onClick={toggleSidebar} sx={{ color: "rgba(255, 255, 255, 0.7)", "&:hover": { color: "#fff" }, mr: 2 }}>
+              <ViewSidebarRoundedIcon />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Box sx={{ display: "flex", alignItems: "center", flexGrow: 1 }}>
+          <SmartToyRoundedIcon sx={{ color: "#7c4dff", fontSize: 32, mr: 1.5 }} />
+          <Box sx={{ display: "flex", flexDirection: "column" }}>
             <Typography
-              variant="caption"
-              sx={{ color: "rgba(255, 255, 255, 0.5)" }}
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                fontSize: { xs: "1.05rem", sm: "1.25rem" },
+                letterSpacing: "0.5px",
+              }}
             >
-              Online
+              AI Chat Assistant
             </Typography>
-            <StatusDot />
+            <Box sx={{ display: "flex", alignItems: "center" }}>
+              <Typography
+                variant="caption"
+                sx={{ color: "rgba(255, 255, 255, 0.5)" }}
+              >
+                Online
+              </Typography>
+              <StatusDot />
+            </Box>
           </Box>
         </Box>
+        {messages.length > 0 && (
+          <Tooltip title="Download Chat">
+            <IconButton onClick={handleDownloadChat} sx={{ color: "rgba(255, 255, 255, 0.7)", "&:hover": { color: "#fff" } }}>
+              <DownloadRoundedIcon />
+            </IconButton>
+          </Tooltip>
+        )}
       </Header>
 
       {/* Main Message Area */}
@@ -175,7 +210,16 @@ export const ChatWindow = ({ messages, isLoading, error, onSendMessage }) => {
           </EmptyState>
         ) : (
           messages.map((msg, index) => (
-            <MessageBubble key={index} message={msg.text} isUser={msg.isUser} />
+            <MessageBubble 
+              key={index} 
+              index={index}
+              message={msg.text} 
+              isUser={msg.isUser} 
+              toolStatus={msg.toolStatus} 
+              imageBase64={msg.imageBase64} 
+              onRegenerate={onRegenerate}
+              onEdit={onEdit}
+            />
           ))
         )}
 
