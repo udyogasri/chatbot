@@ -13,7 +13,6 @@ const Sidebar = ({ sessions, currentSessionId, onNewChat, onSelectSession, onDel
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
 
   const startEditing = (e, session) => {
     e.stopPropagation();
@@ -91,8 +90,7 @@ const Sidebar = ({ sessions, currentSessionId, onNewChat, onSelectSession, onDel
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                setIsSearching(true);
-                onSearch(searchQuery).finally(() => setIsSearching(false));
+                onSearch(searchQuery);
               }
             }}
             InputProps={{

@@ -43,7 +43,7 @@ export const sendChatMessage = async (message, imageBase64, docData, callbacks) 
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       

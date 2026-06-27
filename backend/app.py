@@ -11,6 +11,12 @@ import database
 import models
 import base64
 import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
+import io
+
+# Configure Tesseract path for Windows
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # Create DB tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -20,6 +26,7 @@ load_dotenv()
 
 # Import Groq service
 from services.groq_service import GroqService  # noqa: E402
+from services.rag_service import rag_service  # noqa: E402
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -47,6 +54,9 @@ app.add_middleware(
 
 # Initialize the Groq service
 groq_service = GroqService()
+
+MAX_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
+MAX_FILE_BASE64_CHARS = 16 * 1024 * 1024
 
 
 # Request Pydantic Schema
@@ -122,24 +132,64 @@ async def chat_endpoint(request: ChatRequest):
             groq_service = GroqService()
 
         message_text = request.message
+
+        if request.image_base64 and len(request.image_base64) > MAX_IMAGE_BASE64_CHARS:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Uploaded image is too large. Please try a smaller file.",
+            )
         
         if request.file_base64:
+            if len(request.file_base64) > MAX_FILE_BASE64_CHARS:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Uploaded document is too large. Please try a smaller file.",
+                )
             try:
+                # Remove validate=True in case frontend sends slight padding issues
                 file_bytes = base64.b64decode(request.file_base64)
                 extracted_text = ""
                 
                 if request.file_type == "application/pdf":
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
                     for page in doc:
-                        extracted_text += page.get_text()
+                        page_text = page.get_text()
+                        if not page_text.strip():
+                            try:
+                                pix = page.get_pixmap()
+                                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                                page_text = pytesseract.image_to_string(img)
+                            except Exception as ocr_err:
+                                print(f"OCR failed for a page: {ocr_err}")
+                        extracted_text += page_text + "\n"
                 elif request.file_type in ["text/plain", "text/csv"]:
                     extracted_text = file_bytes.decode("utf-8")
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Unsupported file type. Please upload a PDF, text file, or CSV.",
+                    )
                     
-                if extracted_text:
-                    extracted_text = extracted_text[:30000] # Safe limit to prevent context blowup
-                    message_text = f"Document Context ({request.file_name}):\n{extracted_text}\n\nUser Question:\n{message_text}"
+                if extracted_text.strip():
+                    # Ingest the document into our Vector DB
+                    rag_service.ingest_document(extracted_text, request.file_name)
+                else:
+                    extracted_text = "ERROR: This document contained no readable text. It appears to be an image-based scan, and the OCR engine failed to run because Tesseract is not installed on the system."
+                    rag_service.ingest_document(extracted_text, request.file_name)
+                    
+            except HTTPException:
+                raise
             except Exception as e:
                 print(f"Error processing document: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error processing uploaded document: {str(e)}",
+                )
+
+        # Always query the RAG service for relevant context
+        retrieved_context = rag_service.query_context(message_text)
+        if retrieved_context:
+            message_text = f"Relevant Document Context:\n{retrieved_context}\n\nUser Question:\n{message_text}"
 
         return StreamingResponse(
             groq_service.generate_stream(message_text, request.image_base64), 

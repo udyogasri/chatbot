@@ -18,7 +18,7 @@ const InputWrapper = styled(Box)(({ theme }) => ({
   zIndex: 2,
 }));
 
-const InnerContainer = styled(Box)(({ theme }) => ({
+const InnerContainer = styled(Box)(() => ({
   display: "flex",
   flexDirection: "column",
   width: "100%",
@@ -42,9 +42,9 @@ const InputRow = styled(Box)(({ theme }) => ({
   paddingRight: theme.spacing(0.75),
 }));
 
-const PreviewArea = styled(Box)(({ theme }) => ({
+const PreviewArea = styled(Box)(() => ({
   position: "relative",
-  padding: theme.spacing(2, 2, 0, 2),
+  padding: "16px 16px 0 16px",
   display: "inline-block",
 }));
 

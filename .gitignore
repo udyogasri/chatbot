@@ -31,3 +31,8 @@ logs
 *.sln
 *.sw?
 .DS_Store
+
+# Databases
+*.db
+*.sqlite3
+chroma_data/

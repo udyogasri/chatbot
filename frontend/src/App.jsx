@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { ThemeProvider, createTheme, CssBaseline, Box } from "@mui/material";
 import ChatWindow from "./components/ChatWindow";
 import Sidebar from "./components/Sidebar";
@@ -51,6 +51,12 @@ import { sendChatMessage, getSessions, createSession, getSessionMessages, delete
     },
   });
 
+const createClientMessageId = () => (
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+);
+
 function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sessions, setSessions] = useState([]);
@@ -62,34 +68,7 @@ function App() {
 
   const streamingTextRef = useRef("");
 
-  useEffect(() => {
-    loadSessions();
-  }, []);
-
-  const loadSessions = async () => {
-    try {
-      const data = await getSessions();
-      setSessions(data);
-      if (data.length > 0 && !currentSessionId) {
-        handleSelectSession(data[0].id);
-      }
-    } catch (err) {
-      console.error("Failed to load sessions:", err);
-    }
-  };
-
-  const handleNewChat = async () => {
-    try {
-      const newSession = await createSession();
-      setSessions([newSession, ...sessions]);
-      setCurrentSessionId(newSession.id);
-      setMessages([]);
-    } catch (err) {
-      console.error("Failed to create new chat:", err);
-    }
-  };
-
-  const handleSelectSession = async (id) => {
+  const handleSelectSession = useCallback(async (id) => {
     setCurrentSessionId(id);
     setIsLoading(true);
     try {
@@ -105,6 +84,33 @@ function App() {
       console.error("Failed to load messages:", err);
     } finally {
       setIsLoading(false);
+    }
+  }, []);
+
+  const loadSessions = useCallback(async (selectFirstSession = false) => {
+    try {
+      const data = await getSessions();
+      setSessions(data);
+      if (selectFirstSession && data.length > 0) {
+        handleSelectSession(data[0].id);
+      }
+    } catch (err) {
+      console.error("Failed to load sessions:", err);
+    }
+  }, [handleSelectSession]);
+
+  useEffect(() => {
+    loadSessions(true);
+  }, [loadSessions]);
+
+  const handleNewChat = async () => {
+    try {
+      const newSession = await createSession();
+      setSessions((prev) => [newSession, ...prev]);
+      setCurrentSessionId(newSession.id);
+      setMessages([]);
+    } catch (err) {
+      console.error("Failed to create new chat:", err);
     }
   };
 
@@ -144,7 +150,8 @@ function App() {
   };
 
   const streamAIResponse = async (text, imageBase64, docData, activeSessionId) => {
-    setMessages((prev) => [...prev, { text: "", isUser: false, toolStatus: null }]);
+    const assistantMessageId = createClientMessageId();
+    setMessages((prev) => [...prev, { id: assistantMessageId, text: "", isUser: false, toolStatus: null }]);
 
     setError(null);
     setIsLoading(true);
@@ -156,23 +163,23 @@ function App() {
            streamingTextRef.current += chunkText;
            const currentText = streamingTextRef.current;
            setMessages((prev) => {
-             const newMsgs = [...prev];
-             newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], text: currentText };
-             return newMsgs;
+             return prev.map((msg) => (
+               msg.id === assistantMessageId ? { ...msg, text: currentText } : msg
+             ));
            });
         },
-        onToolStart: (toolName, args) => {
+        onToolStart: (toolName) => {
            setMessages((prev) => {
-             const newMsgs = [...prev];
-             newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], toolStatus: `Running tool: ${toolName}...` };
-             return newMsgs;
+             return prev.map((msg) => (
+               msg.id === assistantMessageId ? { ...msg, toolStatus: `Running tool: ${toolName}...` } : msg
+             ));
            });
         },
-        onToolEnd: (toolName) => {
+        onToolEnd: () => {
            setMessages((prev) => {
-             const newMsgs = [...prev];
-             newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], toolStatus: null };
-             return newMsgs;
+             return prev.map((msg) => (
+               msg.id === assistantMessageId ? { ...msg, toolStatus: null } : msg
+             ));
            });
         },
         onError: (errMsg) => {
@@ -200,25 +207,20 @@ function App() {
       setCurrentSessionId(activeSessionId);
     }
 
+    const userMessageId = createClientMessageId();
+    setMessages((prev) => [...prev, { id: userMessageId, text, isUser: true, imageBase64 }]);
+
     try {
       const savedMsg = await saveMessageToBackend(activeSessionId, { text, isUser: true, imageBase64 });
-      setMessages(prev => {
-        const newMsgs = [...prev];
-        for(let i=newMsgs.length-1; i>=0; i--) {
-           if(newMsgs[i].text === text && newMsgs[i].isUser) {
-              newMsgs[i].id = savedMsg.id;
-              break;
-           }
-        }
-        return newMsgs;
-      });
+      setMessages((prev) => prev.map((msg) => (
+        msg.id === userMessageId ? { ...msg, id: savedMsg.id } : msg
+      )));
       loadSessions(); // refresh titles
     } catch (e) {
       console.error("Failed to save user message:", e);
+      setError("Failed to save your message. Please try again.");
+      return;
     }
-
-    const userMessage = { text, isUser: true, imageBase64 };
-    setMessages((prev) => [...prev, userMessage]);
 
     await streamAIResponse(text, imageBase64, docData, activeSessionId);
   };
@@ -226,7 +228,6 @@ function App() {
   const handleRegenerate = async (index) => {
     let text = "";
     let imageBase64 = null;
-    let docData = null; // Regenerating won't resend the doc since it's heavy, just the text. Or we could save the docData in state. For now, regenerating only resends the text and image.
     for (let i = index - 1; i >= 0; i--) {
       if (messages[i].isUser) {
         text = messages[i].text;

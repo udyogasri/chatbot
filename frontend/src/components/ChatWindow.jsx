@@ -204,14 +204,14 @@ export const ChatWindow = ({ messages, isLoading, error, onSendMessage, isSideba
                 fontSize: { xs: "0.85rem", sm: "0.95rem" },
               }}
             >
-              Ask me anything. I'm powered by OpenAI's language models and
+              Ask me anything. I&apos;m powered by OpenAI&apos;s language models and
               FastAPI.
             </Typography>
           </EmptyState>
         ) : (
           messages.map((msg, index) => (
             <MessageBubble 
-              key={index} 
+              key={msg.id ?? index} 
               index={index}
               message={msg.text} 
               isUser={msg.isUser} 
