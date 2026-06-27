@@ -33,12 +33,18 @@ class GroqService:
         Streams response from Groq, handling MCP tool calls dynamically.
         Yields JSON strings separated by newlines.
         """
+        max_image_base64_chars = 12 * 1024 * 1024
+
         if not self.client:
             yield json.dumps({"type": "error", "content": "Groq API key is missing. Please configure .env"}) + "\n"
             return
 
         if not message.strip():
             yield json.dumps({"type": "error", "content": "Message content cannot be empty."}) + "\n"
+            return
+
+        if image_base64 and len(image_base64) > max_image_base64_chars:
+            yield json.dumps({"type": "error", "content": "Uploaded image is too large. Please try a smaller file."}) + "\n"
             return
 
         content = [{"type": "text", "text": message}]
@@ -51,7 +57,12 @@ class GroqService:
         messages = [
             {
                 "role": "system",
-                "content": "You are a helpful AI Chat Assistant. You have access to local file system tools via MCP. Use them if necessary to answer the user's request. Keep responses concise, useful, and formatted beautifully in markdown."
+                "content": (
+                    "You are a helpful AI Chat Assistant. You have access to a RAG system. "
+                    "If the user asks you to analyze a document, its contents will be prepended to their message under 'Relevant Document Context'. "
+                    "DO NOT claim that you cannot read or analyze files. You MUST use the provided context to answer their question. "
+                    "Use external tools only when they are available and clearly helpful. Keep responses concise, useful, and formatted beautifully in markdown."
+                )
             },
             {"role": "user", "content": content}
         ]
@@ -72,8 +83,11 @@ class GroqService:
         except Exception as e:
             logger.warning(f"Could not get MCP tools (MCP server might not be running): {e}")
 
+        # Use Vision model if an image is provided
+        current_model = "llama-3.2-11b-vision-preview" if image_base64 else self.model_name
+
         kwargs = {
-            "model": self.model_name,
+            "model": current_model,
             "messages": messages,
             "stream": True,
         }
